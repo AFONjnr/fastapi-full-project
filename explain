@@ -1,0 +1,210 @@
+# Let's go through the code line by line to explain how it works:
+
+# ### Imports
+
+# ```python
+# from fastapi import FastAPI, Depends, HTTPException, status
+# from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+# from pydantic import BaseModel
+# from typing import Optional
+# import sqlite3
+# import auth
+# ```
+
+# - **`FastAPI`**: The main class for creating the FastAPI application.
+# - **`Depends`**: Used for dependency injection (not used in this code but required for certain cases, like `OAuth2PasswordBearer`).
+# - **`HTTPException`**: Raised when an HTTP error occurs. This is used to return errors to the client.
+# - **`status`**: Contains standard HTTP status codes for ease of use (e.g., `HTTP_404_NOT_FOUND`).
+# - **`OAuth2PasswordBearer`**: A class that helps with OAuth2 authentication. It’s used here to get a token in `POST /signin` and `POST /logout`.
+# - **`OAuth2PasswordRequestForm`**: The form data used for OAuth2 login (username and password).
+# - **`BaseModel`**: The base class for all Pydantic models, used to define the data models.
+# - **`Optional`**: A generic type from `typing` indicating that a value can be of a specified type or `None`.
+# - **`sqlite3`**: The built-in library to interact with SQLite databases.
+# - **`auth`**: A custom module that contains functions for hashing and verifying passwords.
+
+# ### FastAPI App Initialization
+
+# ```python
+# app = FastAPI()
+# oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+# ```
+
+# - **`app = FastAPI()`**: This initializes the FastAPI application. The app object will be used to define routes and handle HTTP requests.
+# - **`oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")`**: This creates an OAuth2PasswordBearer instance to handle token-based authentication. The token will be provided through the `tokenUrl`, which is defined as `"token"` in this case.
+
+# ### Database Initialization
+
+# ```python
+# def get_db():
+#     conn = sqlite3.connect("users.db")
+#     conn.execute("""CREATE TABLE IF NOT EXISTS users (
+#                     id INTEGER PRIMARY KEY,
+#                     username TEXT UNIQUE,
+#                     hashed_password TEXT
+#                 )""")
+#     return conn
+# ```
+
+# - **`get_db()`**: This function establishes a connection to an SQLite database file named `users.db`. It also ensures that the `users` table exists, creating it if it doesn't. The table contains:
+#   - `id`: The unique identifier for each user.
+#   - `username`: The user's username, which must be unique.
+#   - `hashed_password`: The password, which is stored in a hashed form.
+# - The connection to the database is returned so that queries can be executed.
+
+# ### Pydantic Models
+
+# ```python
+# class User(BaseModel):
+#     username: str
+#     password: str
+
+# class UserInDB(BaseModel):
+#     username: str
+#     hashed_password: str
+
+# class UserUpdate(BaseModel):
+#     username: str
+#     password: Optional[str] = None
+# ```
+
+# - **`User`**: This model defines the schema for user input data when creating a new user. It contains two fields: `username` and `password`, both required.
+# - **`UserInDB`**: This model represents the schema for a user as stored in the database. It includes the `username` and `hashed_password` (no password field because it’s already hashed).
+# - **`UserUpdate`**: This model allows users to update their information. The `password` field is optional (`Optional[str]`), meaning the user doesn't have to provide a new password if they don’t want to.
+
+# ### Helper Functions
+
+# ```python
+# def create_user(username: str, password: str):
+#     db = get_db()
+#     hashed_password = auth.hash_password(password)
+#     try:
+#         db.execute("INSERT INTO users (username, hashed_password) VALUES (?, ?)", (username, hashed_password))
+#         db.commit()
+#     except sqlite3.IntegrityError:
+#         raise HTTPException(status_code=400, detail="Username already exists")
+# ```
+
+# - **`create_user()`**: This function inserts a new user into the `users` table. It hashes the provided password using `auth.hash_password(password)`, then inserts the `username` and `hashed_password` into the database. If the username already exists, it raises an HTTP 400 error.
+
+# ```python
+# def get_user_by_username(username: str) -> Optional[UserInDB]:
+#     db = get_db()
+#     cursor = db.execute("SELECT * FROM users WHERE username = ?", (username,))
+#     user = cursor.fetchone()
+#     if user:
+#         return UserInDB(username=user[1], hashed_password=user[2])
+#     return None
+# ```
+
+# - **`get_user_by_username()`**: This function queries the database for a user by their `username`. It returns a `UserInDB` object containing the `username` and `hashed_password`, or `None` if the user doesn’t exist.
+
+# ```python
+# def update_user(username: str, password: Optional[str] = None):
+#     db = get_db()
+#     if password:
+#         hashed_password = auth.hash_password(password)
+#         db.execute("UPDATE users SET hashed_password = ? WHERE username = ?", (hashed_password, username))
+#         db.commit()
+# ```
+
+# - **`update_user()`**: This function updates a user's password. If a new password is provided, it hashes it and updates the database with the new `hashed_password`.
+
+# ```python
+# def delete_user(username: str):
+#     db = get_db()
+#     db.execute("DELETE FROM users WHERE username = ?", (username,))
+#     db.commit()
+# ```
+
+# - **`delete_user()`**: This function deletes a user from the database by their `username`.
+
+# ### Routes
+
+# ```python
+# @app.post("/signup")
+# def signup(user: User):
+#     create_user(user.username, user.password)
+#     return {"message": "User created successfully"}
+# ```
+
+# - **`/signup` (POST)**: This endpoint accepts a `User` object and creates a new user by calling `create_user()`. It returns a success message once the user is created.
+
+# ```python
+# @app.get("/users/{username}")
+# def read_user(username: str):
+#     user = get_user_by_username(username)
+#     if not user:
+#         raise HTTPException(status_code=404, detail="User not found")
+#     return {"username": user.username}
+# ```
+
+# - **`/users/{username}` (GET)**: This endpoint retrieves the user's information by their `username`. If the user is found, it returns the `username`; otherwise, it raises a 404 error.
+
+# ```python
+# @app.put("/users/{username}")
+# def update_user_endpoint(username: str, user_update: UserUpdate):
+#     user = get_user_by_username(username)
+#     if not user:
+#         raise HTTPException(status_code=404, detail="User not found")
+#     if user_update.password:
+#         hashed_password = auth.hash_password(user_update.password)
+#         db = get_db()
+#         db.execute("UPDATE users SET hashed_password = ? WHERE username = ?", (hashed_password, username))
+#         db.commit()
+#     return {"message": "User updated successfully"}
+# ```
+
+# - **`/users/{username}` (PUT)**: This endpoint updates a user’s password if a new password is provided in the request body. If the user doesn’t exist, it raises a 404 error.
+
+# ```python
+# @app.delete("/users/{username}")
+# def delete_user_endpoint(username: str):
+#     user = get_user_by_username(username)
+#     if not user:
+#         raise HTTPException(status_code=404, detail="User not found")
+#     db = get_db()
+#     db.execute("DELETE FROM users WHERE username = ?", (username,))
+#     db.commit()
+#     return {"message": "User deleted successfully"}
+# ```
+
+# - **`/users/{username}` (DELETE)**: This endpoint deletes a user from the database by their `username`. If the user doesn’t exist, it raises a 404 error.
+
+# ### Authentication Endpoints
+
+# ```python
+# @app.post("/signin")
+# def signin(form_data: OAuth2PasswordRequestForm = Depends()):
+#     user = get_user_by_username(form_data.username)
+#     if not user or not auth.verify_password(form_data.password, user.hashed_password):
+#         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
+#     return {"message": "Login successful", "token": "dummy_token"}
+# ```
+
+# - **`/signin` (POST)**: This endpoint authenticates the user by checking if their username exists and verifying the password. If the password is correct, it returns a dummy token (you can replace this with actual token logic).
+
+# ```python
+# @app.post("/reset-password")
+# def reset_password(reset_data: UserUpdate):
+#     user = get_user_by_username(reset_data.username)
+#     if not user:
+#         raise HTTPException(status_code=404, detail="User not found")
+#     if reset_data.password:
+#         update_user(reset_data.username, reset_data.password)
+#     return {"message": "Password reset successful"}
+# ```
+
+# - **`/reset-password` (POST)**: This endpoint resets the user's password. If the user exists and provides a new password, it updates the password in the database.
+
+# ```python
+# @app.post("/logout")
+# def logout(token: str = Depends(oauth2_scheme)):
+#     return {"message": "Logout successful"}
+# ```
+
+# - **`/logout` (POST)**: This is a dummy endpoint for logging out. In a real application, you would invalidate the user's token here.
+
+# ### Summary
+
+# - The code implements a simple CRUD system for managing users with FastAPI and SQLite.
+# - It includes endpoints for creating, reading, updating, and deleting users, as well as user authentication.
